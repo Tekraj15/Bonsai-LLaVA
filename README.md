@@ -9,12 +9,12 @@ The current state of Vision-Language Models (VLMs) is dominated by massive param
 
 **Bonsai-LLaVA** solves this by combining **Knowledge Distillation** with **QLoRA**. We do not just shrink the weights; we teach a tiny, 4-bit quantized "Student" model to mimic the reasoning process of a "Teacher" giant. By fusing the efficiency of **Qwen2.5-0.5B** with the sharp visual encoding of **SigLIP-Base**, we create a VLM that fits on a Raspberry Pi 5 or local laptop while retaining strong reasoning capabilities.
 
-## 🚀 Mission
+## Mission
 To democratize access to high-performance multimodal AI by proving that **architecture-aware distillation** combined with **4-bit Quantization (QLoRA)** can yield edge-native models that rival 7B counterparts while consuming **<2GB VRAM**.
 
 ---
 
-## 🎯 Objectives
+## Objectives
 1.  **Construct "Pico" Architecture:** Fuse `Qwen2.5-0.5B-Instruct` (Language) with `SigLIP-Base-Patch16-224` (Vision) using a custom MLP projector, keeping total parameters under **0.7B**.
 2.  **Implement QLoRA Distillation:** Train the student using **Quantized Low-Rank Adaptation**. The student backbone is frozen in 4-bit NF4 precision, and only the adapters are trained to minimize the **KL-Divergence** between the Student's and Teacher's logits.
 3.  **Optimize for Inference:** Native integration with **FlashAttention-2** and **vLLM** for production serving, targeting <20ms latency.
@@ -46,3 +46,33 @@ The final model runs in a highly optimized state:
 * **Speed:** Uses FlashAttention-2 kernels to eliminate memory bottlenecks during decoding.
 
 ---
+
+
+## Tech Stack
+
+### Core Components
+* **Teacher Model:** `liuhaotian/llava-v1.5-7b` (The Industry Standard)
+* **Student Language Backbone:** `Qwen/Qwen2.5-0.5B-Instruct` (State-of-the-art sub-1B model)
+* **Student Vision Backbone:** `google/siglip-base-patch16-224` (Sigmoid Loss for efficient zero-shot localization)
+
+### Optimization & Training
+* **Framework:** PyTorch 2.1+, Hugging Face Transformers, `bitsandbytes`
+* **Compression:** **QLoRA** (4-bit NormalFloat quantization + LoRA Adapters)
+* **Distillation Logic:** Custom `Trainer` implementing Multi-Task Loss ($L_{Task} + \alpha L_{KL\_Div}$)
+* **Acceleration:** FlashAttention-2, Gradient Checkpointing
+
+### Inference Engine
+* **Serving:** vLLM (Custom Model Registration)
+* **Format:** SafeTensors (FP16 or INT4)
+
+---
+
+
+## 📊 Projected Benchmarks (Target)
+
+| Metric | LLaVA-v1.5-7B | **Bonsai-LLaVA (Pico)** | Change |
+| :--- | :--- | :--- | :--- |
+| **Parameters** | 7.2 Billion | **~0.7 Billion** | 🔻 **90%** |
+| **VRAM (Training)** | ~80GB (Full FT) | **<8GB (QLoRA)** | Edge Ready |
+| **VRAM (Inference)** | ~14GB (FP16) | **~1GB (INT4)** | **14x Smaller** |
+| **Architecture** | CLIP-L + LLaMA-2 | SigLIP-B + Qwen2.5 | Modern Stack |
