@@ -52,12 +52,8 @@ class LLaVADataset(Dataset):
             except Exception as e:
                 print(f"Error loading image {image_path}: {e}")
                 # Return a dummy image or handle error appropriately
-                # For now, we'll just raise it to fail fast during dev
                 raise e
         else:
-            # Handle text-only data if necessary, or raise error if strictly multimodal
-            # For LLaVA, we usually expect images.
-            # Creating a dummy blank image for robustness if needed, but let's assume image exists.
             raise ValueError(f"No image found for item {idx}")
 
         # Process Text
@@ -65,12 +61,7 @@ class LLaVADataset(Dataset):
         conversations = item.get("conversations", [])
         
         # Construct prompt for Qwen
-        # We need to format it according to Qwen's chat template or simple concatenation
-        # For distillation, we typically want:
-        # User: <image> <text>
-        # Assistant: <target>
-        
-        # Simple formatting for now - can be enhanced with chat template
+
         input_text = ""
         target_text = ""
         
