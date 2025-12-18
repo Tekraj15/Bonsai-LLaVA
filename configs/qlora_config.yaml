@@ -1,0 +1,37 @@
+model_name_or_path: "Qwen/Qwen2.5-0.5B-Instruct"
+vision_tower: "google/siglip-base-patch16-224"
+teacher_model: "liuhaotian/llava-v1.5-7b"
+
+data_path: "data/raw/llava_instruct_150k.json"
+image_folder: "data/raw/images"
+
+output_dir: "./checkpoints/bonsai-llava-v1"
+report_to: "wandb"
+
+# Training Hyperparameters
+per_device_train_batch_size: 4
+gradient_accumulation_steps: 4
+learning_rate: 2.0e-4
+weight_decay: 0.0
+num_train_epochs: 1
+lr_scheduler_type: "cosine"
+warmup_ratio: 0.03
+
+# LoRA Config
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lora_target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+# Distillation
+distill_alpha: 0.5
+distill_temperature: 2.0
+
+# System
+bf16: True
+tf32: True
+gradient_checkpointing: True
+logging_steps: 10
+save_steps: 500
+save_total_limit: 3
+dataloader_num_workers: 4
