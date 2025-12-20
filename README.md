@@ -2,12 +2,30 @@
 
 > **Bonsai-Llava** project is started with a sole purpose to practice the **Art of miniaturization without losing the Essence**.
 
-> It's a research practice to distill the visual reasoning capabilities of **LLaVA-v1.5-7B** into a compact **<1B param(490M) student** (TinyLlama + SigLIP) model, optimized for consumer hardware and edge inference text-to-image generation.
+> Bonsai-LLaVA is an experimental project aimed to distill the visual reasoning capabilities of **LLaVA-v1.5-7B** into a compact **<0.5B param(490M) student** (TinyLlama + SigLIP) model, optimized for consumer hardware and edge inference image-to-text generation. The implementation started with extreme architectural compression via Supervised Fine-Tuning (SFT) in Phase-I, with future plan to perform Hidden State Knowledge Distillation (HSKD) in Phase-II, to democratize Multimodal AI to consumer and edge hardware.
 
 ## Introduction
 The current state of Vision-Language Models (VLMs) is dominated by massive parameters (7B+), making them inaccessible for real-time edge applications or resource-constrained environments. While standard quantization helps, it often degrades semantic reasoning.
 
-**Bonsai-LLaVA** solves this by combining **Knowledge Distillation** with **QLoRA**. We do not just shrink the weights; we teach a tiny, 4-bit quantized "Student" model to mimic the reasoning process of a "Teacher" giant. By fusing the efficiency of **Qwen2.5-0.5B** with the sharp visual encoding of **SigLIP-Base**, we create a VLM that fits on a Raspberry Pi 5 or local laptop while retaining strong reasoning capabilities.
+**Bonsai-LLaVA** aims to solve this by combining **Knowledge Distillation** with **QLoRA**. We do not just shrink the weights; we teach a tiny, 4-bit quantized "Student" model to mimic the reasoning process of a "Teacher" giant. By fusing the efficiency of **Qwen2.5-0.5B** with the sharp visual encoding of **SigLIP-Base**, we create a VLM that fits on a Raspberry Pi 5 or local laptop while retaining strong reasoning capabilities.
+
+**The Distillation Challenge**: Ideally, I would have started with standard Knowledge Distillation ($L_{KL}$) to teach the student. But, since the Teacher is LLaVA (Llama based), Student is Qwen, they have different tokenizers(vocabularies) which creates a  critical vocabulary mismatch (32k vs 152k) between teacher/student architectures. Standard logit-based distillation requires a complex alignment algorithm that is computationally expensive.  So, due to compute resource constraints and complexities of compressing models with different architectures, I have divided the project into 2 disttinct phases:
+
+
+# Phase 1: Bonsai-LLaVA-SFT (Current)
+"Architectural Compression & Efficient Transfer"
+
+Focus: Establishing the "Pico" architecture (SigLIP + Qwen-0.5B) and transferring capabilities via Supervised Fine-Tuning (SFT), aiming to optimize the physical architecture and learning directly from high-quality instruction data.
+
+Status: Implementation & Optimization in progress for Apple Silicon (MPS).
+
+# Phase 2: Bonsai-LLaVA-HSD (Future work)
+"Hidden State Knowledge Distillation"
+
+Focus: enhancing the student's reasoning by aligning its internal "brain activity" with the teacher model's hidden states. This bypasses the vocabulary mismatch problem entirely by distilling "concepts" rather than "words."
+
+Status: In Research / Planning.
+
 
 ## Mission
 To democratize access to high-performance multimodal AI by proving that **architecture-aware distillation** combined with **4-bit Quantization (QLoRA)** can yield edge-native models that rival 7B counterparts while consuming **<2GB VRAM**.
@@ -15,36 +33,44 @@ To democratize access to high-performance multimodal AI by proving that **archit
 ---
 
 ## Objectives
-1.  **Construct "Pico" Architecture:** Fuse `Qwen2.5-0.5B-Instruct` (Language) with `SigLIP-Base-Patch16-224` (Vision) using a custom MLP projector, keeping total parameters under **0.7B**.
-2.  **Implement QLoRA Distillation:** Train the student using **Quantized Low-Rank Adaptation**. The student backbone is frozen in 4-bit NF4 precision, and only the adapters are trained to minimize the **KL-Divergence** between the Student's and Teacher's logits.
-3.  **Optimize for Inference:** Native integration with **FlashAttention-2** and **vLLM** for production serving, targeting <20ms latency.
+### Phase I
+1. **Rebuilt the LLaVA architecture from scratch**: Using Architectural Distillation via Transfer Learning, achieve a parameter count of <0.5B.
+2. **Hardware-Aware Training**: Engineer a training pipeline optimized for Apple Silicon (MPS) using FP16 precision to avoid quantization instabilities.
+3. **Edge Compatibility**:Ensure the Supervised fine-tuned student model runs on devices with <2GB VRAM (e.g., Raspberry Pi 5, Mobile Phones, Apple Silicon)
 
+### Phase II
+1. **Feature Alignment**: Implement Hidden State Distillation(HSD) to map the Student's intermediate layer activations to the Teacher's layers.
+2. **MSE Loss Optimization**: Replace standard Cross-Entropy training with a composite loss ($L_{CE} + L_{MSE}$) to force the student to mimic the teacher's internal representation.
+3. **Inference Acceleration**: Native integration with FlashAttention-2 for sub-20ms latency.
 ---
 
-## Methodology: The "Shrink & Teach" Pipeline
+## Methodology: 
 
-Our pipeline follows a three-stage compression process designed to retain intelligence while slashing memory usage.
+The core innovation of Bonsai-LLaVA is the **"Pico" Architecture**, which serves as the foundation for both phases.
 
-### 1. Architecture Alignment (The "Pico" Setup)
-We replace the heavy encoders of standard LLaVA with highly efficient alternatives:
-* **Vision:** Swapped CLIP-Large (300M) for **SigLIP-Base (200M)**. SigLIP's sigmoid loss function allows it to learn better fine-grained features with fewer parameters.
-* **Language:** Swapped Vicuna-7B (7B) for **Qwen2.5-0.5B (0.5B)**.
-* **Connector:** A trainable 2-layer MLP projects 768-dim visual features to the 896-dim text space of Qwen.
+1. **The Common Architecture ("Pico")**
+We replace the heavy legacy components of Standard LLaVA with highly efficient alternatives:
 
-### 2. QLoRA Distillation (The Training)
-Instead of standard fine-tuning (which requires massive VRAM), we use **Parameter-Efficient Distillation**:
-* **Quantization:** The Qwen-0.5B backbone is loaded in **4-bit NF4** precision. Its weights are frozen.
-* **Adaptation:** Low-Rank Adapters (LoRA) are injected into the attention and MLP layers.
-* **Loss Function:** We train *only* the Projector and the LoRA adapters using a composite loss:
-    $$L_{total} = (1 - \alpha) L_{CE} + \alpha T^2 L_{KL}(P_{Teacher} || P_{Student})$$
-    * Where $L_{CE}$ learns the ground truth text.
-    * Where $L_{KL}$ forces the student to match the Teacher's probability distribution (logits), effectively transferring the "reasoning style" of the 7B model.
+### Phase I: The "Pico" Architecture (Architecture Search)
 
-### 3. Inference Optimization
-The final model runs in a highly optimized state:
-* **Memory:** ~600MB VRAM (vs 14GB for LLaVA-7B).
-* **Speed:** Uses FlashAttention-2 kernels to eliminate memory bottlenecks during decoding.
+We rebuilt the LLaVA architecture from scratch, swapping heavy legacy components for modern, lightweight alternatives designed for efficiency.
 
+
+2. **Phase I Training Strategy: "Efficient SFT"**
+In Phase I, we rely on **Data-Driven Transfer**:
+**Quantization**: The Qwen backbone is loaded in 4-bit NF4 precision (via QLoRA) and frozen.
+**Optimization**: We train only the Projector and LoRA Adapters.
+**Loss Function**: Standard Cross-Entropy ($L_{CE}$) on the LLaVA-Instruct-150k dataset.
+**Why SFT?** It avoids the "Vocab Mismatch" issue entirely and is computationally cheaper, allowing us to validate the architecture's capabilities immediately.
+
+
+3. **Phase II Training Strategy: "Hidden State Distillation"**
+In Phase II, we will upgrade the training loop to perform **Feature-Level Distillation**:
+Instead of matching output words (logits), we match internal vectors.
+Method: A learnable "Alignment Projector" maps the Student's hidden states ($d=896$) to the Teacher's hidden states ($d=4096$).
+**Loss Function**:
+$$L_{total} = (1 - \alpha) L_{CE} + \alpha L_{MSE}(H_{Teacher}, Proj(H_{Student}))$$
+Where $L_{MSE}$ minimizes the distance between the Student's "thought vector" and the Teacher's "thought vector."
 ---
 
 
