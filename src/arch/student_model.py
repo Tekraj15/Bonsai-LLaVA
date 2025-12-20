@@ -1,7 +1,7 @@
 # The Pico model (Qwen + SigLIP)
 import torch
 import torch.nn as nn
-from transformers import AutoModelForCausalLM, AutoModel, PreTrainedModel, AutoConfig
+from transformers import AutoModelForCausalLM, AutoModel, PreTrainedModel, AutoConfig, SiglipVisionModel
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from typing import Optional, List, Union, Tuple
 
@@ -34,7 +34,7 @@ class BonsaiStudent(nn.Module):
         
         # 1. Vision Encoder (SigLIP)
         print(f"Loading Vision Encoder: {vision_model_name}")
-        self.vision_tower = AutoModel.from_pretrained(vision_model_name)
+        self.vision_tower = SiglipVisionModel.from_pretrained(vision_model_name)
         self.vision_tower.requires_grad_(False) # Freeze vision tower usually
         
         # 2. Language Model (Qwen)
@@ -46,16 +46,27 @@ class BonsaiStudent(nn.Module):
                 bnb_4bit_compute_dtype=torch.float16,
                 bnb_4bit_quant_type="nf4"
             )
+            # Fix for MPS BFloat16 on macOS < 14: Load config, set to float16, load on CPU first
+            config = AutoConfig.from_pretrained(language_model_name)
+            config.torch_dtype = torch.float16
+            
             self.language_model = AutoModelForCausalLM.from_pretrained(
                 language_model_name,
+                config=config,
                 quantization_config=quantization_config,
-                device_map="auto"
+                torch_dtype=torch.float16,
+                device_map={"":"cpu"} # Force CPU loading to handle BF16->FP16 cast safely
             )
+            # We will move it to device in _initialize() or let Trainer handle it
         else:
+            config = AutoConfig.from_pretrained(language_model_name)
+            config.torch_dtype = torch.float16
+            
             self.language_model = AutoModelForCausalLM.from_pretrained(
                 language_model_name,
+                config=config,
                 torch_dtype=torch.float16,
-                device_map="auto"
+                device_map={"":"cpu"}
             )
             
         # Freeze LM backbone for doing QLoRA (usually handled by PEFT, but good to be explicit if not using PEFT lib immediately)
@@ -66,6 +77,38 @@ class BonsaiStudent(nn.Module):
         text_dim = self.language_model.config.hidden_size # 896 for Qwen-0.5B
         
         self.projector = BonsaiProjector(vision_dim, text_dim)
+        
+        # Initialize device and move components
+        self._initialize()
+        
+    def _initialize(self):
+        """Initialize the model and processor."""
+        self.device = "cpu"
+        if torch.backends.mps.is_available():
+            self.device = "mps"
+        elif torch.cuda.is_available():
+            self.device = "cuda"
+            
+        print(f"Selected device: {self.device}")
+        
+        if self.device == "cpu":
+            print("--- Device Diagnostic ---")
+            print(f"Torch version: {torch.__version__}")
+            print(f"MPS available: {torch.backends.mps.is_available()}")
+            print(f"MPS built: {torch.backends.mps.is_built()}")
+            import platform
+            print(f"Platform: {platform.platform()}")
+            print(f"Processor: {platform.processor()}")
+            print("-------------------------")
+            
+        print(f"Moving Vision Tower and Projector to {self.device}...")
+        self.vision_tower.to(self.device)
+        self.projector.to(self.device)
+        
+        # Explicitly move LM to device (since we loaded it on CPU)
+        if hasattr(self, "language_model"):
+            print(f"Moving Language Model to {self.device}...")
+            self.language_model.to(self.device)
         
     def get_vision_tower(self):
         return self.vision_tower
@@ -159,3 +202,17 @@ class BonsaiStudent(nn.Module):
         
         # 5. Generate
         return self.language_model.generate(inputs_embeds=combined_embeds, **kwargs)
+
+    def print_trainable_parameters(self):
+        """
+        Prints the number of trainable parameters in the model.
+        """
+        trainable_params = 0
+        all_param = 0
+        for _, param in self.named_parameters():
+            all_param += param.numel()
+            if param.requires_grad:
+                trainable_params += param.numel()
+        print(
+            f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param:.2f}"
+        )
