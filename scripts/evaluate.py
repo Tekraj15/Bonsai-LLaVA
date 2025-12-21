@@ -13,32 +13,58 @@ from src.arch.student_model import BonsaiStudent, BonsaiProjector
 
 def load_merged_model(model_path):
     # Reconstruct BonsaiStudent from saved components
-    lm_path = os.path.join(model_path, "language_model")
-    proj_path = os.path.join(model_path, "projector.pt")
+    # model_path should contain adapter_config.json, adapter_model.bin, projector.pt
     
-    print("Loading merged model components...")
-    # 1. Load LM
-    language_model = AutoModelForCausalLM.from_pretrained(lm_path, torch_dtype=torch.float16, device_map="auto")
-    tokenizer = AutoTokenizer.from_pretrained(lm_path)
+    print(f"Loading model from {model_path}...")
     
-    # 2. Load Vision (SigLIP base)
-    # Ideally it should be saved in config. Hardcoding default for now or pass arg.
+    # 1. Load Config (to get base model names)
+    from peft import PeftConfig
+    peft_config = PeftConfig.from_pretrained(model_path)
+    base_llm_name = peft_config.base_model_name_or_path
+    
+    # Hardcoded vision tower for now, or could be saved in a config
     vision_model_name = "google/siglip-base-patch16-224"
-    processor = AutoProcessor.from_pretrained(model_path) # Saved in root of output
     
-    # 3. Initialize Student
-    # Passing load_in_4bit=False because we are loading a merged FP16 model
+    print(f"Base LLM: {base_llm_name}")
+    print(f"Vision Tower: {vision_model_name}")
+    
+    # 2. Initialize Student (Base)
+    # Load it in FP16 for evaluation
     model = BonsaiStudent(
         vision_model_name=vision_model_name,
-        language_model_name=lm_path, # Pass path to load local LM
+        language_model_name=base_llm_name,
         load_in_4bit=False
     )
     
-    print("Loading projector weights...")
-    projector_state = torch.load(proj_path)
-    model.projector.load_state_dict(projector_state)
+    # 3. Load LoRA Adapter
+    from peft import PeftModel
+    model.language_model = PeftModel.from_pretrained(model.language_model, model_path)
     
+    # 4. Load Projector
+    proj_path = os.path.join(model_path, "projector.pt")
+    if os.path.exists(proj_path):
+        print(f"Loading projector from {proj_path}")
+        projector_state = torch.load(proj_path, map_location="cpu")
+        model.projector.load_state_dict(projector_state)
+    else:
+        print("WARNING: No projector.pt found! Using random projector weights.")
+        
+    # 5. Load Processor & Tokenizer
+    processor = AutoProcessor.from_pretrained(vision_model_name) # Load from hub or local if saved
+    # Try loading from model_path first
+    try:
+        processor = AutoProcessor.from_pretrained(model_path)
+    except:
+        pass
+        
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    
+    # Move to device
+    device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+    print(f"Moving model to {device}...")
+    model.to(device)
     model.eval()
+    
     return model, processor, tokenizer
 
 def evaluate(model_path, image_path, prompt="Describe this image."):
