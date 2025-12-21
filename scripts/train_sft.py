@@ -5,7 +5,7 @@ import torch
 from transformers import TrainingArguments, AutoTokenizer, AutoProcessor, Trainer
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 
-# Set environment variables for MPS memory and Tokenizer parallelism
+# environment variables for MPS memory and Tokenizer parallelism
 os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -113,7 +113,22 @@ def train():
     trainer.train()
 
     print("Saving Model...")
-    trainer.save_model(config["output_dir"])
+    print("Saving Model Components...")
+    output_dir = config["output_dir"]
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 1. Save LoRA Adapter
+    student_model.language_model.save_pretrained(output_dir)
+    
+    # 2. Save Projector Weights
+    projector_path = os.path.join(output_dir, "projector.pt")
+    torch.save(student_model.projector.state_dict(), projector_path)
+    
+    # 3. Save Tokenizer & Processor
+    tokenizer.save_pretrained(output_dir)
+    image_processor.save_pretrained(output_dir)
+    
+    print(f"Model components saved to {output_dir}")
 
 if __name__ == "__main__":
     train()
