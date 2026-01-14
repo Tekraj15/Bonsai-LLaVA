@@ -69,8 +69,7 @@ class BonsaiStudent(nn.Module):
                 device_map={"":"cpu"}
             )
             
-        # Freeze LM backbone for doing QLoRA (usually handled by PEFT, but good to be explicit if not using PEFT lib immediately)
-        # For now, we assume the trainer will handle PEFT/LoRA injection.
+        # Freeze LM backbone for doing QLoRA 
         
         # 3. Projector
         vision_dim = self.vision_tower.config.hidden_size # 768 for SigLIP-Base
@@ -117,6 +116,7 @@ class BonsaiStudent(nn.Module):
         self,
         input_ids: torch.LongTensor,
         pixel_values: torch.FloatTensor,
+        image_features: torch.FloatTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
         labels: Optional[torch.LongTensor] = None,
         **kwargs
@@ -126,10 +126,23 @@ class BonsaiStudent(nn.Module):
         We need to inject image embeddings into the input_embeddings of the LM.
         """
         
-        # 1. Extract Image Features
-        with torch.no_grad():
-            vision_outputs = self.vision_tower(pixel_values=pixel_values)
-            image_features = vision_outputs.last_hidden_state # [B, num_patches, vision_dim]
+        # 1. Handle Vision Inputs
+        # CASE A: raw pixels (Standard Inference)
+        if pixel_values is not None and image_features is None:
+             # Ensure Vision Tower is on correct device
+            if self.vision_tower.device != pixel_values.device:
+                self.vision_tower.to(pixel_values.device)
+                self.projector.to(pixel_values.device)
+            
+            with torch.no_grad():
+                vision_outputs = self.vision_tower(pixel_values=pixel_values)
+                image_features = vision_outputs.last_hidden_state
+
+        # CASE B: pre-computed features (Optimized Training)
+        elif image_features is not None:
+             # Just ensure projector is on correct device
+             if self.projector[0].weight.device != image_features.device:
+                self.projector.to(image_features.device)
             
         # 2. Project to Text Space
         image_embeddings = self.projector(image_features) # [B, num_patches, text_dim]
@@ -138,8 +151,11 @@ class BonsaiStudent(nn.Module):
         inputs_embeds = self.language_model.get_input_embeddings()(input_ids)
         
         # 4. Multimodal Fusion
-        # Simple approach for LLaVA for inserting images is to replace a special <image> token with the image embeddings. But handling this Dynamically in a batch is complex.
-        # Prepend Strategy: Image Embeddings + Clean Text
+        # To replace a special <image> token with the image embeddings dynamically in a batch is complex.
+        # So, Prepend Strategy: Image Embeddings + Clean Text
+        
+        # Ensure dtype consistency for MPS (cast image_embeddings to match inputs_embeds)
+        image_embeddings = image_embeddings.to(dtype=inputs_embeds.dtype)
         
         combined_embeds = torch.cat([image_embeddings, inputs_embeds], dim=1)
         
@@ -150,7 +166,8 @@ class BonsaiStudent(nn.Module):
         image_seq_len = image_embeddings.shape[1]
         
         if attention_mask is not None:
-            image_mask = torch.ones((batch_size, image_seq_len), device=attention_mask.device)
+            # Ensure mask uses same dtype as embeddings for MPS compatibility
+            image_mask = torch.ones((batch_size, image_seq_len), device=attention_mask.device, dtype=attention_mask.dtype)
             combined_mask = torch.cat([image_mask, attention_mask], dim=1)
         else:
             combined_mask = None
@@ -216,3 +233,10 @@ class BonsaiStudent(nn.Module):
         print(
             f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param:.2f}"
         )
+
+    def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs=None):
+        """
+        Activates gradient checkpointing for the current model.
+        """
+        self.language_model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gradient_checkpointing_kwargs)
+
