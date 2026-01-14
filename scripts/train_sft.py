@@ -3,7 +3,8 @@ import sys
 import yaml
 import torch
 from transformers import TrainingArguments, AutoTokenizer, AutoProcessor, Trainer
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from peft import LoraConfig, get_peft_model
+from datasets import load_from_disk
 
 # environment variables for MPS memory and Tokenizer parallelism
 os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
@@ -14,7 +15,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.arch.student_model import BonsaiStudent
 from src.datasets.llava_dataset import LLaVADataset
-from src.datasets.data_collator import DataCollatorForDistillation
+from src.datasets.data_collator import CustomeDataCollatorForLlava
 
 def train():
     # Load Config
@@ -38,16 +39,25 @@ def train():
 
     print("Loading Student Model...")
     # 1. Load Student
-    # We use load_in_4bit=True to keep memory usage low, as defined in the class
+    # OPTIMIZATION FIX: Set load_in_4bit=False to use native FP16.
+    # 4-bit is too slow on MPS due to overhead; FP16 is faster and fits in RAM for 0.5B model.
     student_model = BonsaiStudent(
         vision_model_name=config["vision_tower"],
         language_model_name=config["model_name_or_path"],
-        load_in_4bit=True 
+        load_in_4bit=False 
     )
 
-    # Enable Gradient Checkpointing
-    student_model.language_model.gradient_checkpointing_enable()
-    student_model.language_model = prepare_model_for_kbit_training(student_model.language_model)
+    # OPTIMIZATION FIX: Force models to Float16 for native MPS execution
+    print("Moving models to Float16 for MPS acceleration...")
+    student_model.language_model.to(torch.float16)
+    student_model.vision_tower.to(torch.float16)
+    student_model.projector.to(torch.float16)  # Ensure projector is also FP16
+
+    # OPTIMIZATION FIX: Disable Gradient Checkpointing
+    # Compromising ~30% speed for saving memory isn't worth for a tiny 0.5B model.
+
+    # student_model.language_model.gradient_checkpointing_enable()
+    # student_model.language_model = prepare_model_for_kbit_training(student_model.language_model)
 
     # 2. Apply LoRA to Student Language Model
     peft_config = LoraConfig(
@@ -59,7 +69,9 @@ def train():
         task_type="CAUSAL_LM"
     )
     student_model.language_model = get_peft_model(student_model.language_model, peft_config)
-    student_model.print_trainable_parameters()
+    
+    # Print trainable params (Called on the PEFT model directly)
+    student_model.language_model.print_trainable_parameters()
 
     # Ensure Projector is trainable
     for param in student_model.projector.parameters():
@@ -71,16 +83,20 @@ def train():
     
     image_processor = AutoProcessor.from_pretrained(config["vision_tower"], use_fast=True)
 
-    # 4. Load Dataset
-    dataset = LLaVADataset(
-        data_path=config["data_path"],
-        image_folder=config["image_folder"],
-        tokenizer=tokenizer,
-        image_processor=image_processor
-    )
+    # 4. Load Cached Dataset
+    # CHECK: If cached dataset exists, use it. Else, crash/warn.
+    cache_path = os.path.join(config["output_dir"], "cached_dataset")
+    
+    if os.path.exists(cache_path):
+        print(f"Loading Pre-Computed Dataset from {cache_path}...")
+        dataset = load_from_disk(cache_path)
+        # A simple wrapper to ensure it returns PyTorch tensors
+        dataset.set_format("torch") 
+    else:
+        print("Cached dataset not found! Please run scripts/precompute_features.py first.")
+        return
 
     # 5. Training Arguments
-    # Force FP16 for MPS compatibility
     training_args = TrainingArguments(
         output_dir=config["output_dir"],
         per_device_train_batch_size=config["per_device_train_batch_size"],
@@ -90,13 +106,13 @@ def train():
         lr_scheduler_type=config["lr_scheduler_type"],
         warmup_ratio=config["warmup_ratio"],
         bf16=False, 
-        fp16=False, # Disable mixed precision to bypass accelerate check (model is already FP16)
+        fp16=False, # Disable mixed precision to avoid GradScaler 
         tf32=False,
-        gradient_checkpointing=config["gradient_checkpointing"],
+        gradient_checkpointing=False, # FORCE disable checkpointing
         logging_steps=config["logging_steps"],
         save_steps=config["save_steps"],
         save_total_limit=config["save_total_limit"],
-        dataloader_num_workers=config["dataloader_num_workers"],
+        dataloader_num_workers=0, # Keep 0 for MPS stability
         report_to=config["report_to"],
         remove_unused_columns=False 
     )
@@ -106,10 +122,10 @@ def train():
         model=student_model,
         args=training_args,
         train_dataset=dataset,
-        data_collator=DataCollatorForDistillation(tokenizer=tokenizer),
+        data_collator=CustomeDataCollatorForLlava(tokenizer=tokenizer),
     )
 
-    print("Starting SFT Training...")
+    print("Starting SFT Training (Optimized for Speed)...")
     trainer.train()
 
     print("Saving Model...")
