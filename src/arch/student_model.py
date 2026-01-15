@@ -115,8 +115,8 @@ class BonsaiStudent(nn.Module):
     def forward(
         self,
         input_ids: torch.LongTensor,
-        pixel_values: torch.FloatTensor,
-        image_features: torch.FloatTensor = None,
+        pixel_values: torch.FloatTensor = None,  # Optional: for inference with raw images
+        image_features: torch.FloatTensor = None,  # Optional: for training with pre-computed features
         attention_mask: Optional[torch.Tensor] = None,
         labels: Optional[torch.LongTensor] = None,
         **kwargs
@@ -140,11 +140,13 @@ class BonsaiStudent(nn.Module):
 
         # CASE B: pre-computed features (Optimized Training)
         elif image_features is not None:
-             # Just ensure projector is on correct device
-             if self.projector[0].weight.device != image_features.device:
+            # Just ensure projector is on correct device
+            if self.projector.net[0].weight.device != image_features.device:
                 self.projector.to(image_features.device)
             
         # 2. Project to Text Space
+        # Ensure image_features matches projector dtype (FP16) for MPS compatibility
+        image_features = image_features.to(dtype=self.projector.net[0].weight.dtype)
         image_embeddings = self.projector(image_features) # [B, num_patches, text_dim]
         
         # 3. Embed Text
