@@ -4,7 +4,7 @@ import yaml
 import torch
 from transformers import TrainingArguments, AutoTokenizer, AutoProcessor, Trainer
 from peft import LoraConfig, get_peft_model
-from datasets import load_from_disk
+from datasets import load_from_disk, concatenate_datasets
 
 # environment variables for MPS memory and Tokenizer parallelism
 os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
@@ -83,17 +83,44 @@ def train():
     
     image_processor = AutoProcessor.from_pretrained(config["vision_tower"], use_fast=True)
 
-    # 4. Load Cached Dataset
-    # CHECK: If cached dataset exists, use it. Else, crash/warn.
-    cache_path = os.path.join(config["output_dir"], "cached_dataset")
+    # 4. Load Cached Dataset (Sharded)
+    cache_root = os.path.join(config["output_dir"], "cached_shards")
     
-    if os.path.exists(cache_path):
-        print(f"Loading Pre-Computed Dataset from {cache_path}...")
-        dataset = load_from_disk(cache_path)
-        # A simple wrapper to ensure it returns PyTorch tensors
-        dataset.set_format("torch") 
+    if os.path.exists(cache_root):
+        print(f"Loading Sharded Datasets from {cache_root}...")
+        
+        # Find all shard directories
+        shard_dirs = sorted([
+            os.path.join(cache_root, d) 
+            for d in os.listdir(cache_root) 
+            if d.startswith("shard_") and os.path.isdir(os.path.join(cache_root, d))
+        ])
+        
+        if not shard_dirs:
+            print("No shards found inside cached_shards directory!")
+            return
+
+        print(f"Found {len(shard_dirs)} shards. Loading and concatenating...")
+        
+        # Load all shards
+        loaded_shards = []
+        for s_path in shard_dirs:
+            try:
+                loaded_shards.append(load_from_disk(s_path))
+            except Exception as e:
+                print(f"Warning: Could not load shard {s_path}: {e}")
+
+        # Stitch them together
+        if loaded_shards:
+            dataset = concatenate_datasets(loaded_shards)
+            dataset.set_format("torch")
+            print(f"Successfully loaded {len(dataset)} total samples.")
+        else:
+            print("Failed to load any shards.")
+            return
+            
     else:
-        print("Cached dataset not found! Please run scripts/precompute_features.py first.")
+        print("Cached dataset path not found! Please run scripts/precompute_feature_cache.py")
         return
 
     # 5. Training Arguments
