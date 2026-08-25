@@ -2,6 +2,12 @@
 IGNORE_INDEX = -100
 IMAGE_TOKEN_INDEX = -200
 DEFAULT_IMAGE_TOKEN = "<image>"
+
+# Chat formatting. Qwen's chat template injects a Qwen-branded default system
+# prompt when messages don't start with a system turn, so we always supply our own.
+# Training and inference MUST use this same constant or the model sees a different
+# prefix at test time than it was trained on.
+SYSTEM_PROMPT = "You are a helpful visual assistant. Answer the user's questions about the image accurately and concisely."
 DEFAULT_IMAGE_PATCH_TOKEN = "<im_patch>"
 DEFAULT_IM_START_TOKEN = "<im_start>"
 DEFAULT_IM_END_TOKEN = "<im_end>"

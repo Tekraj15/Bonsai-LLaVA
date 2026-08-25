@@ -1,0 +1,38 @@
+# Verified against the working environment (conda env: .llavaenv, Python 3.10.19,
+# macOS 13.3 / Apple Silicon MPS).
+#
+# The previous pin set was uninstallable: torchvision 0.24.1 does not pair with
+# torch 2.5.1 (0.20.x does), and an unpinned transformers is what produced the
+# accelerate/GradScaler breakage during earlier runs.
+
+torch==2.5.1
+torchvision==0.20.1
+
+transformers==4.57.3
+accelerate==1.12.0
+peft==0.18.0
+datasets==4.4.1
+huggingface-hub>=0.27.0
+
+numpy>=2.0,<3
+pillow>=10.0
+requests>=2.31
+PyYAML>=6.0
+tqdm>=4.66
+scipy>=1.11
+sentencepiece>=0.2
+protobuf>=4.25
+einops>=0.7
+
+# Tracking & demo
+wandb>=0.18
+gradio>=5.0
+
+# Tests
+pytest>=8.0
+
+# NOTE: bitsandbytes is intentionally absent. It has no Apple Silicon (MPS)
+# backend, so 4-bit QLoRA training cannot run on this machine — the student is
+# trained as LoRA on an FP16 frozen backbone instead. Install it only for CUDA
+# runs, where `load_in_4bit: true` in configs/qlora_config.yaml becomes usable:
+#     pip install bitsandbytes>=0.43

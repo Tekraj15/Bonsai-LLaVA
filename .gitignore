@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual Environment
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+._*
+
+# --- Project data & artifacts -------------------------------------------------
+# Instruction data, COCO images, cached SigLIP features, length caches.
+data/
+!data/.gitkeep
+
+# Training outputs: LoRA adapters, projector weights, feature shards.
+checkpoints/
+outputs/
+
+# Experiment tracking
+wandb/
+runs/
+logs/
+*.log
+
+# Model binaries — never commit weights; they belong on the Hub.
+*.pt
+*.bin
+*.safetensors
+*.gguf
+*.npy
+
+# Notebooks scratch output
+notebooks/**/*-checkpoint.ipynb
+.ipynb_checkpoints/
+
+# Scratch notes kept in the working tree but never committed (commit message
+# drafts, run notes). Uppercase .TXT only, so requirements.txt stays tracked.
+*.TXT
+
+# NOTE: config JSONs (adapter_config.json, preprocessor_config.json, ...) are
+# deliberately NOT ignored — a blanket *.json rule would silently drop the files
+# needed to reload a trained adapter.

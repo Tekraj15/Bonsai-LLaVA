@@ -1,21 +1,42 @@
 model_name_or_path: "Qwen/Qwen2.5-0.5B-Instruct"
 vision_tower: "google/siglip-base-patch16-224"
-teacher_model: "liuhaotian/llava-v1.5-7b"
+teacher_model: "liuhaotian/llava-v1.5-7b"   # Phase II only; unused by SFT
 
 data_path: "data/raw/llava_instruct_150k.json"
-image_folder: "data/raw/images"
+image_folder: "data/raw/images/train2017"
 
 output_dir: "./checkpoints/bonsai-llava-v1"
-report_to: "wandb"
+report_to: "none"          # set to "wandb" once runs are worth tracking
+seed: 42
+
+# Pre-computed SigLIP features. Left unset by default: the vision tower is <2% of
+# step FLOPs, so caching buys little while costing ~46GB. Point this at a shard
+# directory only if profiling shows the raw pipeline is image-bound — and only if
+# the cache was rebuilt AFTER the label-masking fixes.
+feature_cache_dir: null
 
 # Training Hyperparameters
-per_device_train_batch_size: 4
-gradient_accumulation_steps: 4
+# Measured cliff: >~580 total positions (max_length + 196 image tokens) drives
+# peak memory into swap and step time from ~5s to ~108s. 448 keeps ~93% of
+# samples intact and stays on the fast side of it. Raise on CUDA.
+max_length: 448
+# Measured on the M2 Air (8GB): batch 2 aborts the Metal driver (SIGTRAP) once
+# the 151,936-wide logits tensor and its FP32 upcast are live. Batch 1 fits.
+# On a 16GB CUDA GPU use batch 16 with gradient_accumulation_steps 2.
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 32     # effective batch = 32
 learning_rate: 2.0e-4
 weight_decay: 0.0
 num_train_epochs: 1
+max_steps: -1                       # >0 overrides num_train_epochs; use for short validation runs
 lr_scheduler_type: "cosine"
 warmup_ratio: 0.03
+max_grad_norm: 1.0
+# Pointless at batch_size 1 (a batch of one has nothing to pad against) and it
+# orders longest-first, so the worst-case batches hit before the allocator has
+# settled. Auto-disabled at batch 1 by train_sft.py regardless of this value.
+group_by_length: false
+max_train_samples: null             # set to e.g. 20000 for a local subset run
 
 # LoRA Config
 lora_r: 16
@@ -23,15 +44,26 @@ lora_alpha: 32
 lora_dropout: 0.05
 lora_target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
-# Distillation
+# Precision
+# Backbone is frozen in FP16; trainable params (LoRA + projector) are promoted to
+# FP32 in build_student(). bf16/fp16 autocast stay off: weights are already cast,
+# and MPS GradScaler needs torch >= 2.8.
+load_in_4bit: false                 # true only on CUDA (bitsandbytes has no MPS backend)
+bf16: false
+fp16: false
+# Measured: at 480-token samples this is 10.93s/step vs 107.65s without it.
+# The usual ~30% compute penalty is irrelevant next to avoiding swap.
+gradient_checkpointing: true
+
+# Distillation (Phase II)
 distill_alpha: 0.5
 distill_temperature: 2.0
 
 # System
-bf16: True
-tf32: True
-gradient_checkpointing: True
 logging_steps: 10
 save_steps: 500
 save_total_limit: 3
-dataloader_num_workers: 4
+dataloader_num_workers: 2
+
+# Optimizer
+optim: "adamw_torch"
